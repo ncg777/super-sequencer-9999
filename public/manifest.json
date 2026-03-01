@@ -1,6 +1,6 @@
 {
-  "short_name": "SSeq3k",
-  "name": "Super Sequencer 3000",
+  "short_name": "SSeq9999",
+  "name": "Super Sequencer 9999",
   "icons": [
     {
       "src": "logo32.png",
@@ -20,6 +20,6 @@
   ],
   "start_url": ".",
   "display": "standalone",
-  "theme_color": "#00ff00",
+  "theme_color": "#ff0000",
   "background_color": "#000000"
 }

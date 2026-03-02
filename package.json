@@ -1,6 +1,6 @@
 {
   "name": "super-sequencer-9999",
-  "version": "2026.3.2",
+  "version": "2026.3.4",
   "scripts": {
     "build": "run-p type-check \"build-only {@}\" --",
     "build-only": "vite build",
@@ -9,7 +9,8 @@
     "type-check": "vue-tsc --build --force",
     "type-check:cli": "tsc -p tsconfig.cli.json",
     "generate": "tsx src/cli.ts",
-    "generate:help": "tsx src/cli.ts --help"
+    "generate:help": "tsx src/cli.ts --help",
+    "compose": "tsx scripts/compose.ts"
   },
   "dependencies": {
     "@mdi/font": "7.4.47",
@@ -17,7 +18,7 @@
     "register-service-worker": "^1.7.2",
     "roboto-fontface": "*",
     "tone": "^15.0.4",
-    "ultra-mega-enumerator": "^2026.3.2",
+    "ultra-mega-enumerator": "^2026.3.4",
     "vue": "^3.4.31",
     "vuetify": "^3.6.14",
     "webmidi": "^3.1.12"

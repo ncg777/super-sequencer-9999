@@ -188,28 +188,7 @@ import AdjacencyMatrix from './components/AdjacencyMatrix.vue';
 import * as Tone from 'tone';
 import { Midi } from '@tonejs/midi';
 import { PCS12 } from 'ultra-mega-enumerator';
-
-/**
- * Convert an integer to balanced ternary.
- * Returns an array of trits (-1, 0, 1) from least-significant to most-significant.
- * value = sum( trit[i] * 3^i )
- */
-function toBalancedTernary(n: bigint): number[] {
-  if (n === 0n) return [0];
-  const trits: number[] = [];
-  let v = n;
-  while (v !== 0n) {
-    let r = Number(((v % 3n) + 3n) % 3n); // normalize remainder to 0, 1, or 2
-    if (r === 2) {
-      r = -1;
-      v = (v + 1n) / 3n;
-    } else {
-      v = (v - BigInt(r)) / 3n;
-    }
-    trits.push(r);
-  }
-  return trits;
-}
+import { computeTritEvents, generateMidi, formattedDateUTC } from './sequencer';
 
 export default defineComponent({
   name: 'App',
@@ -291,56 +270,13 @@ export default defineComponent({
         .map((s:string) => { try { return BigInt(s); } catch { return null; } })
         .filter((n): n is bigint => n !== null);
     },
-    scale(): number[] {
-      const s = PCS12.parseForte(this.forte);
-      const p = s?.asSequence()||[];
-      const o = [];
-      
-      for(const n of p) {
-        for(let i=0;i<=10;i++) {
-          const t = n+(12*i);
-          if(t < 128) o.push(t);
-        }
-      }
-      o.sort((a,b) => a-b);
-      return o; 
-    },
-    /**
-     * Compute balanced-ternary note-on / note-off events for every step.
-     * Each step maps its integer to trits; each trit position addresses a scale degree.
-     */
     tritEvents(): { noteOns: number[], noteOffs: number[] }[] {
-      const s = PCS12.parseForte(this.forte);
-      if (!s) return [];
-      const k = s?.getK() ?? 0;
-      const baseIdx = this.octave * k;
-
-      return this.sequence.map(
-        (n: bigint) => {
-          const trits = toBalancedTernary(n);
-          const noteOns: number[] = [];
-          const noteOffs: number[] = [];
-
-          for (let t = 0; t < trits.length; t++) {
-            const trit = trits[t];
-            if (trit === 0) continue;
-            const scaleIdx = baseIdx + t;
-            if (scaleIdx < 0 || scaleIdx >= this.scale.length) continue;
-            const midiNote = this.scale[scaleIdx];
-            if (trit === 1) {
-              noteOns.push(midiNote);
-            } else if (trit === -1) {
-              noteOffs.push(midiNote);
-            }
-          }
-
-          return { noteOns, noteOffs };
-        });
+      return computeTritEvents(this.sequence, this.forte, this.octave);
     },
   },
   methods: {
     formattedDate() {
-      return (timestamp => `${new Date(timestamp).getUTCFullYear()}${String(new Date(timestamp).getUTCMonth() + 1).padStart(2, '0')}${String(new Date(timestamp).getUTCDate()).padStart(2, '0')}T${String(new Date(timestamp).getUTCHours()).padStart(2, '0')}${String(new Date(timestamp).getUTCMinutes()).padStart(2, '0')}${String(new Date(timestamp).getUTCSeconds()).padStart(2, '0')}Z`)(Date.now());
+      return formattedDateUTC();
     },
     async initializeMidi() {
       try {
@@ -404,51 +340,16 @@ export default defineComponent({
       // Use a small lookAhead for a snappier start
       this.synth.context.lookAhead = 0.05;
     },
-    async getMidi():Promise<Midi> {
-      const midi = new Midi();
-      const track = midi.addTrack();
-      track.channel = this.useMidiOutput ? this.midiChannel-1 : 0;
-      
-      midi.header.setTempo(this.bpm);
-
-      const events = this.tritEvents;
-      const activeOnTimes = new Map<number, number>(); // note -> onset time
-
-      for (let i = 0; i < events.length; i++) {
-        const time = i * this.quant;
-        const step = events[i];
-
-        // Close retriggered notes first
-        for (const note of step.noteOns) {
-          const onTime = activeOnTimes.get(note);
-          if (onTime !== undefined) {
-            track.addNote({ midi: note, time: onTime, duration: time - onTime, velocity: 0.5 });
-            activeOnTimes.delete(note);
-          }
-        }
-
-        // Process note offs
-        for (const note of step.noteOffs) {
-          const onTime = activeOnTimes.get(note);
-          if (onTime !== undefined) {
-            track.addNote({ midi: note, time: onTime, duration: time - onTime, velocity: 0.5 });
-            activeOnTimes.delete(note);
-          }
-        }
-
-        // Process note ons
-        for (const note of step.noteOns) {
-          activeOnTimes.set(note, time);
-        }
-      }
-
-      // Close any remaining active notes at end of sequence
-      const endTime = events.length * this.quant;
-      for (const [note, onTime] of activeOnTimes) {
-        track.addNote({ midi: note, time: onTime, duration: endTime - onTime, velocity: 0.5 });
-      }
-      
-      return midi;
+    async getMidi(): Promise<Midi> {
+      return generateMidi({
+        forte: this.forte,
+        bpm: this.bpm,
+        numerator: this.numerator,
+        denominator: this.denominator,
+        octave: this.octave,
+        sequence: this.sequence,
+        channel: this.useMidiOutput ? this.midiChannel - 1 : 0,
+      });
     },
     async toggleSequencer() {
       if (this.isRunning) {

@@ -6,7 +6,10 @@
     "build-only": "vite build",
     "dev": "vite",
     "preview": "vite preview",
-    "type-check": "vue-tsc --build --force"
+    "type-check": "vue-tsc --build --force",
+    "type-check:cli": "tsc -p tsconfig.cli.json",
+    "generate": "tsx src/cli.ts",
+    "generate:help": "tsx src/cli.ts --help"
   },
   "dependencies": {
     "@mdi/font": "7.4.47",
@@ -28,6 +31,7 @@
     "npm-run-all2": "^7.0.1",
     "sass": "1.77.8",
     "sass-embedded": "^1.77.8",
+    "tsx": "^4.21.0",
     "typescript": "^5.8.3",
     "unplugin-fonts": "^1.1.1",
     "unplugin-vue-components": "^0.27.2",

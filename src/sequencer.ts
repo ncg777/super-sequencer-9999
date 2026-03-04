@@ -14,7 +14,7 @@ import * as _toneJs from '@tonejs/midi';
 const MidiCtor: { new(): Midi; new(data: Uint8Array | ArrayBuffer): Midi } =
   (_toneJs as any).Midi ?? (_toneJs as any).default?.Midi;
 
-import { PCS12 } from 'ultra-mega-enumerator';
+import { PCS12, ImmutableCombination } from 'ultra-mega-enumerator';
 
 // ─── Balanced Ternary ────────────────────────────────────────────────────────
 
@@ -244,7 +244,7 @@ export function midiToSequence(params: MidiToSequenceParams): MidiToSequenceResu
   }
 
   // Auto-detect forte from pitch classes when the caller did not supply one.
-  const resolvedForte: string = params.forte ?? new PCS12(new Set(allNotes.map(n => n.midi % 12))).toString();
+  const resolvedForte: string = params.forte ?? PCS12.identify(ImmutableCombination.createWithSizeAndSet(12, new Set(allNotes.map(n => n.midi % 12)))).toString();
 
   const s = PCS12.parseForte(resolvedForte);
   if (!s) return { sequence: [], forte: resolvedForte };

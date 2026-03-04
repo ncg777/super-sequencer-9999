@@ -88,6 +88,14 @@
       <button @click="allNotesOff" class="userbutton">🔇 All Notes Off</button>
       <button @click="copyURL" class="userbutton">📋Copy URL</button>
 			<button @click="downloadMIDI" class="downloadmidi">Download MIDI</button>
+      <button @click="triggerMidiImport" class="userbutton">📥 Import MIDI</button>
+      <input
+        ref="midiFileInput"
+        type="file"
+        accept=".mid,.midi"
+        style="display:none"
+        @change="onMidiFileSelected"
+      />
       <br />
       <br />
       <!-- Help Modal -->
@@ -188,7 +196,7 @@ import AdjacencyMatrix from './components/AdjacencyMatrix.vue';
 import * as Tone from 'tone';
 import { Midi } from '@tonejs/midi';
 import { PCS12 } from 'ultra-mega-enumerator';
-import { computeTritEvents, generateMidi, formattedDateUTC } from './sequencer';
+import { computeTritEvents, generateMidi, formattedDateUTC, midiToSequence } from './sequencer';
 
 export default defineComponent({
   name: 'App',
@@ -492,6 +500,27 @@ export default defineComponent({
 
       // Clean up the URL object
       URL.revokeObjectURL(url);
+    },
+
+    triggerMidiImport() {
+      (this.$refs.midiFileInput as HTMLInputElement).value = '';
+      (this.$refs.midiFileInput as HTMLInputElement).click();
+    },
+
+    async onMidiFileSelected(event: Event) {
+      const input = event.target as HTMLInputElement;
+      const file = input.files?.[0];
+      if (!file) return;
+      const buffer = await file.arrayBuffer();
+      const seq = midiToSequence({
+        midiData: new Uint8Array(buffer),
+        forte: this.forte,
+        octave: this.octave,
+        quantSeconds: this.quant,
+      });
+      this.sequenceInput = seq.map(n => n.toString()).join(' ');
+      this.saveSettingsToLocalStorage();
+      window.alert(`Imported ${seq.length} steps from ${file.name}.`);
     }
   },
   async beforeMount() {

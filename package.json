@@ -9,7 +9,9 @@
     "type-check": "vue-tsc --build --force",
     "type-check:cli": "tsc -p tsconfig.cli.json",
     "generate": "tsx src/cli.ts",
-    "generate:help": "tsx src/cli.ts --help"
+    "generate:help": "tsx src/cli.ts --help",
+    "import-midi": "tsx src/cli-import.ts",
+    "import-midi:help": "tsx src/cli-import.ts --help"
   },
   "dependencies": {
     "@mdi/font": "7.4.47",

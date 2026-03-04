@@ -256,7 +256,9 @@ export function midiToSequence(params: MidiToSequenceParams): MidiToSequenceResu
   // ensures multi-track / multi-channel files are handled uniformly.
   const allNotes: Array<{ midi: number; time: number; duration: number }> = [];
   for (const track of midi.tracks) {
-    // @tonejs/midi track.channel is 0-based; channels param is 1-based
+    // @tonejs/midi track.channel is 0-based; channels param is 1-based.
+    // Channel 10 (0-based: 9) is the General MIDI percussion channel — always skip it.
+    if (track.channel === 9) continue;
     if (channels && channels.length > 0 && !channels.includes(track.channel + 1)) continue;
     for (const note of track.notes) {
       allNotes.push(note);

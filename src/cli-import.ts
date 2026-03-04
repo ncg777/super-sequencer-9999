@@ -159,7 +159,7 @@ for (const filePath of inputFiles) {
   try {
     const buf = readFileSync(filePath);
     const midiData = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-    const { sequence, forte, octave: detectedOctave } = midiToSequence({
+    const { sequence, forte, octave: detectedOctave, bpm: detectedBpm, numerator: detectedNumerator, denominator: detectedDenominator } = midiToSequence({
       midiData,
       forte: forteOverride,
       octave,
@@ -175,17 +175,27 @@ for (const filePath of inputFiles) {
       process.stderr.write(`  Detected octave for "${basename(filePath)}": ${detectedOctave}\n`);
     }
 
+    // Build a full-info block: metadata lines prefixed with "# " followed by the sequence.
+    const infoLines = [
+      `# forte: ${forte}`,
+      `# octave: ${detectedOctave}`,
+      `# bpm: ${detectedBpm}`,
+      `# numerator: ${detectedNumerator}`,
+      `# denominator: ${detectedDenominator}`,
+      line,
+    ].join('\n');
+
     if (outputPath) {
       const stem = basename(filePath).replace(/\.(mid|midi)$/i, '');
       const outFile = isBatch
         ? join(outputPath, `${stem}.seq.txt`)
         : outputPath;
-      writeFileSync(outFile, line + '\n');
+      writeFileSync(outFile, infoLines + '\n');
     } else if (!isBatch) {
-      process.stdout.write(line + '\n');
+      process.stdout.write(infoLines + '\n');
     } else {
-      // batch with no output dir — print each line prefixed by filename
-      process.stdout.write(`${filePath}: ${line}\n`);
+      // batch with no output dir — print each block prefixed by filename
+      process.stdout.write(`${filePath}:\n${infoLines}\n`);
     }
 
     processed++;

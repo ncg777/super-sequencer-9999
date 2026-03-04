@@ -12,8 +12,8 @@
  */
 
 import { parseArgs } from 'node:util';
-import { readFileSync, writeFileSync, mkdirSync, statSync, readdirSync } from 'node:fs';
-import { resolve, basename, join } from 'node:path';
+import { createWriteStream, readFileSync, writeFileSync, statSync, readdirSync } from 'node:fs';
+import { resolve, basename, dirname, join } from 'node:path';
 import { PCS12 } from 'ultra-mega-enumerator';
 import { midiToSequence } from './sequencer.js';
 
@@ -56,8 +56,9 @@ OPTIONS
   -c, --channels <str>     Comma-separated 1-based MIDI channels,
                            empty = all channels                    [default: ""]
   -i, --input <path>       Input .mid file or directory            [required]
-  -O, --output <path>      Output file (single) or directory (batch);
-                           defaults to stdout for single file
+  -O, --output <path>      Output .json file; in batch mode all records are
+                           written as a single JSON array to this file.
+                           Defaults to stdout.
       --no-trim            Keep trailing zero steps
   -h, --help               Show this help and exit
 
@@ -65,8 +66,8 @@ EXAMPLES
   # Import a single MIDI file and print the sequence
   yarn import-midi --input clip.mid
 
-  # Import a directory of MIDI files, writing each to an output directory
-  yarn import-midi --input ./corpus --output ./sequences
+  # Import a directory of MIDI files into a single JSON array file
+  yarn import-midi --input ./corpus --output ./corpus.json
 
   # Custom Forte number override and BPM
   yarn import-midi --input clip.mid --forte "3-11.01" --bpm 140
@@ -147,8 +148,24 @@ if (inputFiles.length === 0) {
 const isBatch = inputFiles.length > 1 || statSync(resolve(values.input as string)).isDirectory();
 const outputPath = values.output as string | undefined;
 
-if (isBatch && outputPath) {
-  mkdirSync(outputPath, { recursive: true });
+// Open output sink for batch mode: stream records one-by-one so the entire
+// array never has to live in memory (avoids RangeError on large corpora).
+type Sink = { write(s: string): void; end(): void };
+let batchSink: Sink | null = null;
+let firstBatchRecord = true;
+
+if (isBatch) {
+  if (outputPath) {
+    // Ensure parent directory exists.
+    const parentDir = dirname(resolve(outputPath));
+    const { mkdirSync: mkdir } = await import('node:fs');
+    mkdir(parentDir, { recursive: true });
+    const ws = createWriteStream(outputPath, { encoding: 'utf8' });
+    batchSink = { write: (s) => { ws.write(s); }, end: () => ws.end() };
+  } else {
+    batchSink = { write: (s) => { process.stdout.write(s); }, end: () => {} };
+  }
+  batchSink.write('[\n');
 }
 
 // ─── Process ─────────────────────────────────────────────────────────────────
@@ -167,7 +184,6 @@ for (const filePath of inputFiles) {
       channels,
       trimTrailingZeros,
     });
-    const line = sequence.map(n => n.toString()).join(' ');
     if (!forteOverride) {
       process.stderr.write(`  Detected forte for "${basename(filePath)}": ${forte}\n`);
     }
@@ -175,33 +191,39 @@ for (const filePath of inputFiles) {
       process.stderr.write(`  Detected octave for "${basename(filePath)}": ${detectedOctave}\n`);
     }
 
-    // Build a full-info block: metadata lines prefixed with "# " followed by the sequence.
-    const infoLines = [
-      `# forte: ${forte}`,
-      `# octave: ${detectedOctave}`,
-      `# bpm: ${detectedBpm}`,
-      `# numerator: ${detectedNumerator}`,
-      `# denominator: ${detectedDenominator}`,
-      line,
-    ].join('\n');
+    // Sequence values are BigInt; serialise as strings to stay within JSON spec.
+    const record = {
+      filename: basename(filePath),
+      forte,
+      octave: detectedOctave,
+      bpm: detectedBpm,
+      numerator: detectedNumerator,
+      denominator: detectedDenominator,
+      sequence: sequence.map(n => n.toString()),
+    };
 
-    if (outputPath) {
-      const stem = basename(filePath).replace(/\.(mid|midi)$/i, '');
-      const outFile = isBatch
-        ? join(outputPath, `${stem}.seq.txt`)
-        : outputPath;
-      writeFileSync(outFile, infoLines + '\n');
-    } else if (!isBatch) {
-      process.stdout.write(infoLines + '\n');
+    if (isBatch) {
+      // Stream each record as a compact JSON line into the array.
+      const comma = firstBatchRecord ? '' : ',';
+      batchSink!.write(comma + JSON.stringify(record) + '\n');
+      firstBatchRecord = false;
+    } else if (outputPath) {
+      writeFileSync(outputPath, JSON.stringify(record, null, 2) + '\n');
     } else {
-      // batch with no output dir — print each block prefixed by filename
-      process.stdout.write(`${filePath}:\n${infoLines}\n`);
+      process.stdout.write(JSON.stringify(record, null, 2) + '\n');
     }
 
     processed++;
   } catch (err) {
     console.error(`Warning: failed to process "${filePath}": ${(err as Error).message}`);
   }
+}
+
+// ─── Flush batch output ──────────────────────────────────────────────────────
+
+if (isBatch && batchSink) {
+  batchSink.write(']\n');
+  batchSink.end();
 }
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

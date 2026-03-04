@@ -9,11 +9,12 @@
 // We import the type for compile-time safety and handle the runtime divergence below.
 import type { Midi } from '@tonejs/midi';
 import * as _toneJs from '@tonejs/midi';
-const MidiCtor: new () => Midi =
-  (_toneJs as unknown as { Midi: new () => Midi }).Midi ??
-  (_toneJs as unknown as { default: { Midi: new () => Midi } }).default?.Midi;
+// Handle CJS/ESM duality: Vite resolves named exports; Node.js wraps under `.default`.
+// The constructor accepts optional raw MIDI data (Uint8Array | ArrayBuffer) or nothing.
+const MidiCtor: { new(): Midi; new(data: Uint8Array | ArrayBuffer): Midi } =
+  (_toneJs as any).Midi ?? (_toneJs as any).default?.Midi;
 
-import { PCS12 } from 'ultra-mega-enumerator';
+import { PCS12, ImmutableCombination } from 'ultra-mega-enumerator';
 
 // ─── Balanced Ternary ────────────────────────────────────────────────────────
 
@@ -176,6 +177,127 @@ export function generateMidi(params: SequencerParams): Midi {
   }
 
   return midi;
+}
+
+// ─── MIDI Import ─────────────────────────────────────────────────────────────
+
+export interface MidiToSequenceResult {
+  /** The recovered balanced-ternary integer sequence. */
+  sequence: bigint[];
+  /** The Forte number detected from (or supplied for) this MIDI file. */
+  forte: string;
+}
+
+export interface MidiToSequenceParams {
+  /** Raw MIDI file bytes (works in both browser and Node.js). */
+  midiData: Uint8Array | ArrayBuffer;
+  /**
+   * Forte number to use for scale construction. When omitted, the pitch-class
+   * set is detected automatically from the notes present in the MIDI file.
+   */
+  forte?: string;
+  octave: number;
+  /**
+   * Step duration in seconds. Use `60 / (bpm × denominator)` to match
+   * the sequencer's own quant value.
+   */
+  quantSeconds: number;
+  /**
+   * Which MIDI channels to consider (1-based, empty = all channels).
+   * Default: all channels.
+   */
+  channels?: number[];
+  /**
+   * When true, trim trailing zero steps from the output.
+   * Default: true.
+   */
+  trimTrailingZeros?: boolean;
+}
+
+/**
+ * Parse a MIDI file and recover the balanced-ternary integer sequence that
+ * encodes it, using the inverse of the `generateMidi` algorithm.
+ *
+ * All tracks and channels are merged into a single note pool before processing.
+ * When `forte` is not supplied, the pitch-class set is detected automatically
+ * from the notes present in the file.
+ */
+export function midiToSequence(params: MidiToSequenceParams): MidiToSequenceResult {
+  const { midiData, octave, quantSeconds, channels, trimTrailingZeros = true } = params;
+
+  const midi = new MidiCtor(midiData);
+
+  // Collect all notes from all tracks into a single pool, applying the
+  // optional channel filter.  Treating every track as one combined stream
+  // ensures multi-track / multi-channel files are handled uniformly.
+  const allNotes: Array<{ midi: number; time: number; duration: number }> = [];
+  for (const track of midi.tracks) {
+    // @tonejs/midi track.channel is 0-based; channels param is 1-based
+    if (channels && channels.length > 0 && !channels.includes(track.channel + 1)) continue;
+    for (const note of track.notes) {
+      allNotes.push(note);
+    }
+  }
+
+  if (allNotes.length === 0) {
+    return { sequence: [], forte: params.forte ?? '0-1' };
+  }
+
+  // Auto-detect forte from pitch classes when the caller did not supply one.
+  const resolvedForte: string = params.forte ?? PCS12.identify(ImmutableCombination.createWithSizeAndSet(12, new Set(allNotes.map(n => n.midi % 12)))).toString();
+
+  const s = PCS12.parseForte(resolvedForte);
+  if (!s) return { sequence: [], forte: resolvedForte };
+  const k = s.getK();
+  const baseIdx = octave * k;
+  const scale = computeScale(resolvedForte);
+
+  // stepMap[step][tritPos] = accumulated trit value
+  const stepMap = new Map<number, Map<number, number>>();
+
+  const accumulate = (step: number, tritPos: number, delta: number) => {
+    let posMap = stepMap.get(step);
+    if (!posMap) { posMap = new Map(); stepMap.set(step, posMap); }
+    posMap.set(tritPos, (posMap.get(tritPos) ?? 0) + delta);
+  };
+
+  for (const note of allNotes) {
+    const scaleIdx = scale.indexOf(note.midi);
+    if (scaleIdx === -1) continue;
+    const tritPos = scaleIdx - baseIdx;
+    if (tritPos < 0) continue;
+    const onStep = Math.round(note.time / quantSeconds);
+    const offStep = Math.round((note.time + note.duration) / quantSeconds);
+    accumulate(onStep, tritPos, 1);
+    accumulate(offStep, tritPos, -1);
+  }
+
+  if (stepMap.size === 0) return { sequence: [], forte: resolvedForte };
+
+  const maxStep = Math.max(...stepMap.keys());
+  const result: bigint[] = [];
+
+  for (let step = 0; step <= maxStep; step++) {
+    const posMap = stepMap.get(step);
+    let n = 0n;
+    if (posMap) {
+      for (const [tritPos, acc] of posMap) {
+        const trit = Math.sign(acc);
+        if (trit !== 0) {
+          n += BigInt(trit) * (3n ** BigInt(tritPos));
+        }
+      }
+    }
+    result.push(n);
+  }
+
+  if (trimTrailingZeros) {
+    while (result.length > 0 && result[result.length - 1] === 0n) {
+      result.pop();
+    }
+  }
+
+  return { sequence: result, forte: resolvedForte };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

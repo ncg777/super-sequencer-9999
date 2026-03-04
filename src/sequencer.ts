@@ -181,10 +181,21 @@ export function generateMidi(params: SequencerParams): Midi {
 
 // ─── MIDI Import ─────────────────────────────────────────────────────────────
 
+export interface MidiToSequenceResult {
+  /** The recovered balanced-ternary integer sequence. */
+  sequence: bigint[];
+  /** The Forte number detected from (or supplied for) this MIDI file. */
+  forte: string;
+}
+
 export interface MidiToSequenceParams {
   /** Raw MIDI file bytes (works in both browser and Node.js). */
   midiData: Uint8Array | ArrayBuffer;
-  forte: string;
+  /**
+   * Forte number to use for scale construction. When omitted, the pitch-class
+   * set is detected automatically from the notes present in the MIDI file.
+   */
+  forte?: string;
   octave: number;
   /**
    * Step duration in seconds. Use `60 / (bpm × denominator)` to match
@@ -206,17 +217,40 @@ export interface MidiToSequenceParams {
 /**
  * Parse a MIDI file and recover the balanced-ternary integer sequence that
  * encodes it, using the inverse of the `generateMidi` algorithm.
+ *
+ * All tracks and channels are merged into a single note pool before processing.
+ * When `forte` is not supplied, the pitch-class set is detected automatically
+ * from the notes present in the file.
  */
-export function midiToSequence(params: MidiToSequenceParams): bigint[] {
-  const { midiData, forte, octave, quantSeconds, channels, trimTrailingZeros = true } = params;
-
-  const s = PCS12.parseForte(forte);
-  if (!s) return [];
-  const k = s.getK();
-  const baseIdx = octave * k;
-  const scale = computeScale(forte);
+export function midiToSequence(params: MidiToSequenceParams): MidiToSequenceResult {
+  const { midiData, octave, quantSeconds, channels, trimTrailingZeros = true } = params;
 
   const midi = new MidiCtor(midiData);
+
+  // Collect all notes from all tracks into a single pool, applying the
+  // optional channel filter.  Treating every track as one combined stream
+  // ensures multi-track / multi-channel files are handled uniformly.
+  const allNotes: Array<{ midi: number; time: number; duration: number }> = [];
+  for (const track of midi.tracks) {
+    // @tonejs/midi track.channel is 0-based; channels param is 1-based
+    if (channels && channels.length > 0 && !channels.includes(track.channel + 1)) continue;
+    for (const note of track.notes) {
+      allNotes.push(note);
+    }
+  }
+
+  if (allNotes.length === 0) {
+    return { sequence: [], forte: params.forte ?? '0-1' };
+  }
+
+  // Auto-detect forte from pitch classes when the caller did not supply one.
+  const resolvedForte: string = params.forte ?? new PCS12(new Set(allNotes.map(n => n.midi % 12))).toString();
+
+  const s = PCS12.parseForte(resolvedForte);
+  if (!s) return { sequence: [], forte: resolvedForte };
+  const k = s.getK();
+  const baseIdx = octave * k;
+  const scale = computeScale(resolvedForte);
 
   // stepMap[step][tritPos] = accumulated trit value
   const stepMap = new Map<number, Map<number, number>>();
@@ -227,22 +261,18 @@ export function midiToSequence(params: MidiToSequenceParams): bigint[] {
     posMap.set(tritPos, (posMap.get(tritPos) ?? 0) + delta);
   };
 
-  for (const track of midi.tracks) {
-    // @tonejs/midi track.channel is 0-based; channels param is 1-based
-    if (channels && channels.length > 0 && !channels.includes(track.channel + 1)) continue;
-    for (const note of track.notes) {
-      const scaleIdx = scale.indexOf(note.midi);
-      if (scaleIdx === -1) continue;
-      const tritPos = scaleIdx - baseIdx;
-      if (tritPos < 0) continue;
-      const onStep = Math.round(note.time / quantSeconds);
-      const offStep = Math.round((note.time + note.duration) / quantSeconds);
-      accumulate(onStep, tritPos, 1);
-      accumulate(offStep, tritPos, -1);
-    }
+  for (const note of allNotes) {
+    const scaleIdx = scale.indexOf(note.midi);
+    if (scaleIdx === -1) continue;
+    const tritPos = scaleIdx - baseIdx;
+    if (tritPos < 0) continue;
+    const onStep = Math.round(note.time / quantSeconds);
+    const offStep = Math.round((note.time + note.duration) / quantSeconds);
+    accumulate(onStep, tritPos, 1);
+    accumulate(offStep, tritPos, -1);
   }
 
-  if (stepMap.size === 0) return [];
+  if (stepMap.size === 0) return { sequence: [], forte: resolvedForte };
 
   const maxStep = Math.max(...stepMap.keys());
   const result: bigint[] = [];
@@ -267,7 +297,7 @@ export function midiToSequence(params: MidiToSequenceParams): bigint[] {
     }
   }
 
-  return result;
+  return { sequence: result, forte: resolvedForte };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

@@ -13,7 +13,7 @@
 
 import { parseArgs } from 'node:util';
 import { readFileSync, writeFileSync, mkdirSync, statSync, readdirSync } from 'node:fs';
-import { resolve, extname, basename, join } from 'node:path';
+import { resolve, basename, join } from 'node:path';
 import { PCS12 } from 'ultra-mega-enumerator';
 import { midiToSequence } from './sequencer.js';
 
@@ -21,7 +21,7 @@ import { midiToSequence } from './sequencer.js';
 
 const { values } = parseArgs({
   options: {
-    forte:       { type: 'string',  short: 'f', default: '5-35.05' },
+    forte:       { type: 'string',  short: 'f'                       },
     bpm:         { type: 'string',  short: 'b', default: '90'       },
     numerator:   { type: 'string',  short: 'n', default: '4'        },
     denominator: { type: 'string',  short: 'd', default: '5'        },
@@ -46,7 +46,7 @@ USAGE
   yarn import-midi [options]
 
 OPTIONS
-  -f, --forte <str>        Forte number of the pitch-class set     [default: "5-35.05"]
+  -f, --forte <str>        Forte number override; auto-detected when omitted
   -b, --bpm <num>          Tempo in BPM                            [default: 90]
   -n, --numerator <num>    Time-signature numerator                [default: 4]
   -d, --denominator <num>  Time-signature denominator              [default: 5]
@@ -68,7 +68,7 @@ EXAMPLES
   # Import a directory of MIDI files, writing each to an output directory
   yarn import-midi --input ./corpus --output ./sequences
 
-  # Custom Forte number and BPM
+  # Custom Forte number override and BPM
   yarn import-midi --input clip.mid --forte "3-11.01" --bpm 140
 `);
   process.exit(0);
@@ -90,7 +90,7 @@ if (!values.input) {
   process.exit(1);
 }
 
-const forte       = values.forte as string;
+const forteOverride = values.forte as string | undefined;
 const bpm         = parseIntParam('bpm',         values.bpm,         1, 499); // matches generate CLI limit
 const denominator = parseIntParam('denominator', values.denominator, 1,  16);
 const octave      = parseIntParam('octave',      values.octave,      0,  10);
@@ -107,8 +107,8 @@ const quantSeconds = 60 / (bpm * denominator);
 
 await PCS12.init();
 
-if (!PCS12.parseForte(forte)) {
-  console.error(`Error: unknown Forte number "${forte}". Run --help for usage.`);
+if (forteOverride && !PCS12.parseForte(forteOverride)) {
+  console.error(`Error: unknown Forte number "${forteOverride}". Run --help for usage.`);
   process.exit(1);
 }
 
@@ -157,8 +157,18 @@ for (const filePath of inputFiles) {
   try {
     const buf = readFileSync(filePath);
     const midiData = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-    const seq = midiToSequence({ midiData, forte, octave, quantSeconds, channels, trimTrailingZeros });
-    const line = seq.map(n => n.toString()).join(' ');
+    const { sequence, forte } = midiToSequence({
+      midiData,
+      forte: forteOverride,
+      octave,
+      quantSeconds,
+      channels,
+      trimTrailingZeros,
+    });
+    const line = sequence.map(n => n.toString()).join(' ');
+    if (!forteOverride) {
+      process.stderr.write(`  Detected forte for "${basename(filePath)}": ${forte}\n`);
+    }
 
     if (outputPath) {
       const stem = basename(filePath).replace(/\.(mid|midi)$/i, '');

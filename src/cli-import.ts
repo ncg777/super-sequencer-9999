@@ -25,7 +25,7 @@ const { values } = parseArgs({
     bpm:         { type: 'string',  short: 'b', default: '90'       },
     numerator:   { type: 'string',  short: 'n', default: '4'        },
     denominator: { type: 'string',  short: 'd', default: '5'        },
-    octave:      { type: 'string',  short: 'o', default: '6'        },
+    octave:      { type: 'string',  short: 'o'                       },
     channels:    { type: 'string',  short: 'c', default: ''         },
     input:       { type: 'string',  short: 'i'                       },
     output:      { type: 'string',  short: 'O'                       },
@@ -52,7 +52,7 @@ OPTIONS
   -d, --denominator <num>  Time-signature denominator              [default: 5]
                            Also controls step duration:
                            quant = 60 / (bpm × denominator)
-  -o, --octave <num>       Octave shift (trit 0 → degree octave×k) [default: 6]
+  -o, --octave <num>       Octave shift (trit 0 → degree octave×k) [default: auto]
   -c, --channels <str>     Comma-separated 1-based MIDI channels,
                            empty = all channels                    [default: ""]
   -i, --input <path>       Input .mid file or directory            [required]
@@ -93,7 +93,9 @@ if (!values.input) {
 const forteOverride = values.forte as string | undefined;
 const bpm         = parseIntParam('bpm',         values.bpm,         1, 499); // matches generate CLI limit
 const denominator = parseIntParam('denominator', values.denominator, 1,  16);
-const octave      = parseIntParam('octave',      values.octave,      0,  10);
+const octave      = values.octave !== undefined
+  ? parseIntParam('octave', values.octave, 0, 10)
+  : undefined;
 
 const channelsRaw = (values.channels as string).trim();
 const channels: number[] = channelsRaw
@@ -157,7 +159,7 @@ for (const filePath of inputFiles) {
   try {
     const buf = readFileSync(filePath);
     const midiData = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-    const { sequence, forte } = midiToSequence({
+    const { sequence, forte, octave: detectedOctave } = midiToSequence({
       midiData,
       forte: forteOverride,
       octave,
@@ -168,6 +170,9 @@ for (const filePath of inputFiles) {
     const line = sequence.map(n => n.toString()).join(' ');
     if (!forteOverride) {
       process.stderr.write(`  Detected forte for "${basename(filePath)}": ${forte}\n`);
+    }
+    if (octave === undefined) {
+      process.stderr.write(`  Detected octave for "${basename(filePath)}": ${detectedOctave}\n`);
     }
 
     if (outputPath) {

@@ -512,15 +512,15 @@ export default defineComponent({
       const file = input.files?.[0];
       if (!file) return;
       const buffer = await file.arrayBuffer();
-      const { sequence, forte } = midiToSequence({
+      const { sequence, forte, octave } = midiToSequence({
         midiData: new Uint8Array(buffer),
-        octave: this.octave,
         quantSeconds: this.quant,
       });
       this.sequenceInput = sequence.map(n => n.toString()).join(' ');
       this.forte = forte;
+      this.octave = octave;
       this.saveSettingsToLocalStorage();
-      window.alert(`Imported ${sequence.length} steps from ${file.name}.\nDetected scale: ${forte}`);
+      window.alert(`Imported ${sequence.length} steps from ${file.name}.\nDetected scale: ${forte}, octave: ${octave}`);
     }
   },
   async beforeMount() {

@@ -186,6 +186,8 @@ export interface MidiToSequenceResult {
   sequence: bigint[];
   /** The Forte number detected from (or supplied for) this MIDI file. */
   forte: string;
+  /** The octave shift detected from (or supplied for) this MIDI file. */
+  octave: number;
 }
 
 export interface MidiToSequenceParams {
@@ -196,11 +198,16 @@ export interface MidiToSequenceParams {
    * set is detected automatically from the notes present in the MIDI file.
    */
   forte?: string;
-  octave: number;
+  /**
+   * Octave shift. When omitted, automatically detected from the lowest note
+   * present in the MIDI data so that no notes are dropped.
+   */
+  octave?: number;
   /**
    * Step duration in seconds. Use `60 / (bpm × denominator)` to match
    * the sequencer's own quant value.
    */
+
   quantSeconds: number;
   /**
    * Which MIDI channels to consider (1-based, empty = all channels).
@@ -223,7 +230,7 @@ export interface MidiToSequenceParams {
  * from the notes present in the file.
  */
 export function midiToSequence(params: MidiToSequenceParams): MidiToSequenceResult {
-  const { midiData, octave, quantSeconds, channels, trimTrailingZeros = true } = params;
+  const { midiData, quantSeconds, channels, trimTrailingZeros = true } = params;
 
   const midi = new MidiCtor(midiData);
 
@@ -240,25 +247,47 @@ export function midiToSequence(params: MidiToSequenceParams): MidiToSequenceResu
   }
 
   if (allNotes.length === 0) {
-    return { sequence: [], forte: params.forte ?? '0-1' };
+    return { sequence: [], forte: params.forte ?? '0-1', octave: params.octave ?? 0 };
   }
 
   // Auto-detect forte from pitch classes when the caller did not supply one.
   const resolvedForte: string = params.forte ?? PCS12.identify(ImmutableCombination.createWithSizeAndSet(12, new Set(allNotes.map(n => n.midi % 12)))).toString();
 
   const s = PCS12.parseForte(resolvedForte);
-  if (!s) return { sequence: [], forte: resolvedForte };
+  if (!s) return { sequence: [], forte: resolvedForte, octave: params.octave ?? 0 };
   const k = s.getK();
-  const baseIdx = octave * k;
   const scale = computeScale(resolvedForte);
 
-  // stepMap[step][tritPos] = accumulated trit value
-  const stepMap = new Map<number, Map<number, number>>();
+  // Auto-detect octave from the lowest note present when not explicitly supplied.
+  // This ensures no notes are silently dropped due to tritPos < 0.
+  let effectiveOctave: number;
+  if (params.octave !== undefined) {
+    effectiveOctave = params.octave;
+  } else {
+    const scaleIndices = allNotes
+      .map(n => scale.indexOf(n.midi))
+      .filter(i => i !== -1);
+    if (scaleIndices.length === 0) {
+      return { sequence: [], forte: resolvedForte, octave: 0 };
+    }
+    const minScaleIdx = Math.min(...scaleIndices);
+    effectiveOctave = Math.floor(minScaleIdx / k);
+  }
+  const baseIdx = effectiveOctave * k;
 
-  const accumulate = (step: number, tritPos: number, delta: number) => {
+  // Track note-ons and note-offs separately per step/tritPos.
+  // Using separate counts (instead of a single accumulated delta) prevents
+  // retriggers from being silently cancelled: a note-off + note-on at the
+  // same step on the same pitch would sum to 0 with plain accumulation,
+  // but should produce a +1 trit (retrigger).
+  const stepMap = new Map<number, Map<number, { ons: number; offs: number }>>();
+
+  const addEvent = (step: number, tritPos: number, isOn: boolean) => {
     let posMap = stepMap.get(step);
     if (!posMap) { posMap = new Map(); stepMap.set(step, posMap); }
-    posMap.set(tritPos, (posMap.get(tritPos) ?? 0) + delta);
+    const entry = posMap.get(tritPos) ?? { ons: 0, offs: 0 };
+    if (isOn) entry.ons++; else entry.offs++;
+    posMap.set(tritPos, entry);
   };
 
   for (const note of allNotes) {
@@ -268,11 +297,11 @@ export function midiToSequence(params: MidiToSequenceParams): MidiToSequenceResu
     if (tritPos < 0) continue;
     const onStep = Math.round(note.time / quantSeconds);
     const offStep = Math.round((note.time + note.duration) / quantSeconds);
-    accumulate(onStep, tritPos, 1);
-    accumulate(offStep, tritPos, -1);
+    addEvent(onStep, tritPos, true);
+    addEvent(offStep, tritPos, false);
   }
 
-  if (stepMap.size === 0) return { sequence: [], forte: resolvedForte };
+  if (stepMap.size === 0) return { sequence: [], forte: resolvedForte, octave: effectiveOctave };
 
   const maxStep = Math.max(...stepMap.keys());
   const result: bigint[] = [];
@@ -281,8 +310,13 @@ export function midiToSequence(params: MidiToSequenceParams): MidiToSequenceResu
     const posMap = stepMap.get(step);
     let n = 0n;
     if (posMap) {
-      for (const [tritPos, acc] of posMap) {
-        const trit = Math.sign(acc);
+      for (const [tritPos, { ons, offs }] of posMap) {
+        // Note-on (including retrigger) takes priority over note-off.
+        // This matches generateMidi which closes then re-opens on retrigger.
+        let trit: number;
+        if (ons > 0) trit = 1;
+        else if (offs > 0) trit = -1;
+        else trit = 0;
         if (trit !== 0) {
           n += BigInt(trit) * (3n ** BigInt(tritPos));
         }
@@ -297,7 +331,7 @@ export function midiToSequence(params: MidiToSequenceParams): MidiToSequenceResu
     }
   }
 
-  return { sequence: result, forte: resolvedForte };
+  return { sequence: result, forte: resolvedForte, octave: effectiveOctave };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

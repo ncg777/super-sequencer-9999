@@ -188,6 +188,12 @@ export interface MidiToSequenceResult {
   forte: string;
   /** The octave shift detected from (or supplied for) this MIDI file. */
   octave: number;
+  /** BPM read from the MIDI file header (falls back to 120 if absent). */
+  bpm: number;
+  /** Time-signature numerator read from the MIDI file header (falls back to 4 if absent). */
+  numerator: number;
+  /** Time-signature denominator read from the MIDI file header (falls back to 4 if absent). */
+  denominator: number;
 }
 
 export interface MidiToSequenceParams {
@@ -204,11 +210,11 @@ export interface MidiToSequenceParams {
    */
   octave?: number;
   /**
-   * Step duration in seconds. Use `60 / (bpm × denominator)` to match
-   * the sequencer's own quant value.
+   * Step duration in seconds. When omitted, computed automatically from the
+   * MIDI file header as `60 / (bpm × denominator)`.  Use `60 / (bpm × denominator)`
+   * to match the sequencer's own quant value when overriding.
    */
-
-  quantSeconds: number;
+  quantSeconds?: number;
   /**
    * Which MIDI channels to consider (1-based, empty = all channels).
    * Default: all channels.
@@ -230,9 +236,20 @@ export interface MidiToSequenceParams {
  * from the notes present in the file.
  */
 export function midiToSequence(params: MidiToSequenceParams): MidiToSequenceResult {
-  const { midiData, quantSeconds, channels, trimTrailingZeros = true } = params;
+  const { midiData, channels, trimTrailingZeros = true } = params;
 
   const midi = new MidiCtor(midiData);
+
+  // ── Read tempo & time-signature from the MIDI header ──────────────────────
+  const headerBpm = midi.header.tempos?.length > 0 ? midi.header.tempos[0].bpm : 120;
+  const headerTimeSig: [number, number] = midi.header.timeSignatures?.length > 0
+    ? midi.header.timeSignatures[0].timeSignature as [number, number]
+    : [4, 4];
+  const headerNumerator = headerTimeSig[0];
+  const headerDenominator = headerTimeSig[1];
+
+  // Use caller-supplied quant when provided; otherwise derive from the header.
+  const quantSeconds = params.quantSeconds ?? (60 / (headerBpm * headerDenominator));
 
   // Collect all notes from all tracks into a single pool, applying the
   // optional channel filter.  Treating every track as one combined stream
@@ -247,14 +264,14 @@ export function midiToSequence(params: MidiToSequenceParams): MidiToSequenceResu
   }
 
   if (allNotes.length === 0) {
-    return { sequence: [], forte: params.forte ?? '0-1', octave: params.octave ?? 0 };
+    return { sequence: [], forte: params.forte ?? '0-1', octave: params.octave ?? 0, bpm: headerBpm, numerator: headerNumerator, denominator: headerDenominator };
   }
 
   // Auto-detect forte from pitch classes when the caller did not supply one.
   const resolvedForte: string = params.forte ?? PCS12.identify(ImmutableCombination.createWithSizeAndSet(12, new Set(allNotes.map(n => n.midi % 12)))).toString();
 
   const s = PCS12.parseForte(resolvedForte);
-  if (!s) return { sequence: [], forte: resolvedForte, octave: params.octave ?? 0 };
+  if (!s) return { sequence: [], forte: resolvedForte, octave: params.octave ?? 0, bpm: headerBpm, numerator: headerNumerator, denominator: headerDenominator };
   const k = s.getK();
   const scale = computeScale(resolvedForte);
 
@@ -268,7 +285,7 @@ export function midiToSequence(params: MidiToSequenceParams): MidiToSequenceResu
       .map(n => scale.indexOf(n.midi))
       .filter(i => i !== -1);
     if (scaleIndices.length === 0) {
-      return { sequence: [], forte: resolvedForte, octave: 0 };
+      return { sequence: [], forte: resolvedForte, octave: 0, bpm: headerBpm, numerator: headerNumerator, denominator: headerDenominator };
     }
     const minScaleIdx = Math.min(...scaleIndices);
     effectiveOctave = Math.floor(minScaleIdx / k);
@@ -296,12 +313,16 @@ export function midiToSequence(params: MidiToSequenceParams): MidiToSequenceResu
     const tritPos = scaleIdx - baseIdx;
     if (tritPos < 0) continue;
     const onStep = Math.round(note.time / quantSeconds);
-    const offStep = Math.round((note.time + note.duration) / quantSeconds);
+    let offStep = Math.round((note.time + note.duration) / quantSeconds);
+    // Ensure every note spans at least one step; otherwise note-on and
+    // note-off land on the same step, the on wins via priority, and
+    // the off is silently lost — producing a stuck note.
+    if (offStep <= onStep) offStep = onStep + 1;
     addEvent(onStep, tritPos, true);
     addEvent(offStep, tritPos, false);
   }
 
-  if (stepMap.size === 0) return { sequence: [], forte: resolvedForte, octave: effectiveOctave };
+  if (stepMap.size === 0) return { sequence: [], forte: resolvedForte, octave: effectiveOctave, bpm: headerBpm, numerator: headerNumerator, denominator: headerDenominator };
 
   const maxStep = Math.max(...stepMap.keys());
   const result: bigint[] = [];
@@ -331,7 +352,7 @@ export function midiToSequence(params: MidiToSequenceParams): MidiToSequenceResu
     }
   }
 
-  return { sequence: result, forte: resolvedForte, octave: effectiveOctave };
+  return { sequence: result, forte: resolvedForte, octave: effectiveOctave, bpm: headerBpm, numerator: headerNumerator, denominator: headerDenominator };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

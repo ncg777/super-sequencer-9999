@@ -1,6 +1,6 @@
 {
   "extends": "@tsconfig/node22/tsconfig.json",
-  "include": ["src/cli.ts", "src/cli-import.ts", "src/sequencer.ts"],
+  "include": ["src/cli.ts", "src/cli-import.ts", "src/mcp-server.ts", "src/sequencer.ts"],
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",

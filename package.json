@@ -11,10 +11,12 @@
     "generate": "tsx src/cli.ts",
     "generate:help": "tsx src/cli.ts --help",
     "import-midi": "tsx src/cli-import.ts",
-    "import-midi:help": "tsx src/cli-import.ts --help"
+    "import-midi:help": "tsx src/cli-import.ts --help",
+    "mcp-server": "tsx src/mcp-server.ts"
   },
   "dependencies": {
     "@mdi/font": "7.4.47",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "@tonejs/midi": "^2.0.28",
     "register-service-worker": "^1.7.2",
     "roboto-fontface": "*",

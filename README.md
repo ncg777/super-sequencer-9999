@@ -67,3 +67,164 @@ Sequence values are parsed as **BigInt**, so there is no JavaScript numeric prec
 
 Powers of 3 are the building blocks: `3^i` turns on exactly scale degree `i`, and `-3^i` turns it off. Sums and differences combine operations. `0` is a rest/hold step.
 
+## CLI
+
+Two command-line tools are included for headless MIDI generation and import. Both require [Node.js](https://nodejs.org/) and are run with `yarn`.
+
+### MIDI Generator — `yarn generate`
+
+Generates a Standard MIDI file from a balanced-ternary sequence.
+
+```
+USAGE
+  yarn generate [options]
+
+OPTIONS
+  -f, --forte <str>        Forte number of the pitch-class set     [default: "5-35.05"]
+  -b, --bpm <num>          Tempo in BPM                            [default: 90]
+  -n, --numerator <num>    Time-signature numerator                [default: 4]
+  -d, --denominator <num>  Time-signature denominator              [default: 5]
+                           Also controls step duration:
+                           quant = 60 / (bpm × denominator)
+  -o, --octave <num>       Octave shift (trit 0 → degree octave×k) [default: 6]
+  -s, --sequence <str>     Space-separated integers in balanced
+                           ternary order                           [default: "1 3 9 -1 -3 -9"]
+  -c, --channel <num>      MIDI channel 1–16                       [default: 1]
+  -O, --output <path>      Output .mid file path                   [default: auto]
+  -h, --help               Show this help and exit
+```
+
+**Examples**
+
+```bash
+# Default pentatonic riff at 90 BPM (auto-named output file)
+yarn generate
+
+# Custom Forte number, faster tempo, different octave
+yarn generate --forte "3-11.01" --bpm 140 --octave 5
+
+# Full chromatic cluster, written to a specific file
+yarn generate -f "12-1" -b 120 -s "1 -1 3 -3" -O cluster.mid
+```
+
+### MIDI Importer — `yarn import-midi`
+
+Recovers balanced-ternary sequences from one or more MIDI files.
+
+```
+USAGE
+  yarn import-midi [options]
+
+OPTIONS
+  -f, --forte <str>        Forte number override; auto-detected when omitted
+  -b, --bpm <num>          Tempo in BPM                            [default: 90]
+  -n, --numerator <num>    Time-signature numerator                [default: 4]
+  -d, --denominator <num>  Time-signature denominator              [default: 5]
+                           Also controls step duration:
+                           quant = 60 / (bpm × denominator)
+  -o, --octave <num>       Octave shift (trit 0 → degree octave×k) [default: auto]
+  -c, --channels <str>     Comma-separated 1-based MIDI channels,
+                           empty = all channels                    [default: ""]
+  -i, --input <path>       Input .mid file or directory            [required]
+  -O, --output <path>      Output .json file; in batch mode all records are
+                           written as a single JSON array to this file.
+                           Defaults to stdout.
+      --no-trim            Keep trailing zero steps
+  -h, --help               Show this help and exit
+```
+
+**Examples**
+
+```bash
+# Import a single MIDI file and print the sequence to stdout
+yarn import-midi --input clip.mid
+
+# Import a directory of MIDI files into a single JSON array file
+yarn import-midi --input ./corpus --output ./corpus.json
+
+# Custom Forte number override and BPM
+yarn import-midi --input clip.mid --forte "3-11.01" --bpm 140
+```
+
+## MCP Server
+
+Super Sequencer 9999 ships an [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that exposes the sequencer's capabilities as tools for AI assistants such as Claude or GitHub Copilot.
+
+### Starting the server
+
+```bash
+yarn mcp-server
+```
+
+The server communicates over **stdio** using the standard MCP JSON-RPC protocol. No port is opened.
+
+### Registering with an MCP client
+
+Add the following entry to your MCP client's configuration (the exact file path varies by client):
+
+```json
+{
+  "mcpServers": {
+    "super-sequencer-9999": {
+      "command": "yarn",
+      "args": ["--cwd", "/path/to/super-sequencer-9999", "mcp-server"]
+    }
+  }
+}
+```
+
+Replace `/path/to/super-sequencer-9999` with the absolute path to this repository.
+
+### Available tools
+
+#### `generate_midi`
+
+Generate a Standard MIDI file from a balanced-ternary integer sequence. Returns the MIDI bytes as a **base64** string and a suggested filename.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `forte` | string | `"5-35.05"` | Forte number of the pitch-class set. |
+| `bpm` | integer | `90` | Tempo in BPM (1–499). |
+| `numerator` | integer | `4` | Time-signature numerator (1–16). |
+| `denominator` | integer | `5` | Time-signature denominator (1–16); also drives step duration: `quant = 60 / (bpm × denominator)`. |
+| `octave` | integer | `6` | Octave shift (0–10): trit 0 addresses scale degree `octave × k`. |
+| `sequence` | string | `"1 3 9 -1 -3 -9"` | Space-separated integers in balanced-ternary order. |
+| `channel` | integer | `1` | MIDI channel 1–16. |
+
+**Returns** a JSON object:
+```json
+{
+  "filename": "SSeq9999-20260313T000000Z-5-35.05-90bpm-4on5timesig.mid",
+  "midi_base64": "<base64-encoded MIDI bytes>",
+  "steps": 6
+}
+```
+
+#### `import_midi`
+
+Recover a balanced-ternary sequence from a Standard MIDI file supplied as base64.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `midi_base64` | string | ✅ | Raw MIDI file bytes encoded as base64. |
+| `forte` | string | | Forte number override; auto-detected when omitted. |
+| `bpm` | integer | | BPM override for step-duration computation. |
+| `denominator` | integer | | Denominator override for step-duration computation. |
+| `octave` | integer | | Octave shift override (0–10); auto-detected when omitted. |
+| `channels` | string | | Comma-separated 1-based MIDI channels, e.g. `"1,2"`. Empty = all channels. |
+| `no_trim` | boolean | | Keep trailing zero steps when `true`. Default: `false`. |
+
+**Returns** a JSON object:
+```json
+{
+  "forte": "5-35.05",
+  "octave": 6,
+  "bpm": 90,
+  "numerator": 4,
+  "denominator": 5,
+  "sequence": ["1", "3", "9", "-1", "-3", "-9"]
+}
+```
+
+> **Note:** sequence values are serialised as strings to preserve BigInt precision beyond JavaScript's `Number.MAX_SAFE_INTEGER`.
+
